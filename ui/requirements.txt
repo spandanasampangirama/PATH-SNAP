@@ -1,0 +1,5 @@
+# Laptop 2 (UI only) — no model or road-network dependencies needed.
+streamlit==1.38.0
+streamlit-folium==0.22.1
+folium==0.17.0
+requests==2.32.3

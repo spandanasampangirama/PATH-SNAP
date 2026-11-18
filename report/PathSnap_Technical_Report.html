@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>PathSnap — Technical Report</title>
+<style>
+    body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        line-height: 1.6;
+        color: #1a202c;
+        max-width: 900px;
+        margin: 40px auto;
+        padding: 0 20px;
+    }
+    h1, h2, h3, h4 {
+        color: #2d3748;
+        font-weight: 700;
+        margin-top: 1.5em;
+    }
+    h1 { border-bottom: 2px solid #e2e8f0; padding-bottom: 0.3em; }
+    h2 { border-bottom: 1px solid #edf2f7; padding-bottom: 0.2em; }
+    table {
+        border-collapse: collapse;
+        width: 100%;
+        margin: 20px 0;
+        font-size: 0.95em;
+    }
+    th, td {
+        border: 1px solid #cbd5e0;
+        padding: 8px 12px;
+        text-align: left;
+    }
+    th {
+        background-color: #f7fafc;
+        font-weight: 600;
+    }
+    tr:nth-child(even) { background-color: #f8fafc; }
+    code {
+        background-color: #edf2f7;
+        padding: 2px 5px;
+        border-radius: 4px;
+        font-family: Consolas, Monaco, monospace;
+        font-size: 0.9em;
+    }
+    pre {
+        background-color: #2d3748;
+        color: #f7fafc;
+        padding: 15px;
+        border-radius: 6px;
+        overflow-x: auto;
+    }
+    pre code {
+        background-color: transparent;
+        color: inherit;
+        padding: 0;
+    }
+    hr {
+        border: 0;
+        height: 1px;
+        background: #e2e8f0;
+        margin: 30px 0;
+    }
+    @media print {
+        body { max-width: 100%; margin: 20px; }
+        pre, table { page-break-inside: avoid; }
+    }
+</style>
+</head>
+<body>
+<h1 id="pathsnap-distributed-map-matching-route-reconstruction">PathSnap: Distributed Map-Matching &amp; Route Reconstruction</h1>
+<p><strong>Technical Report &amp; System Architecture</strong><br />
+<strong>Course / Event:</strong> UE24CS352A Machine Learning Hackathon, PES University<br />
+<strong>Date:</strong> November 2026  </p>
+<hr />
+<h1 id="section-2-dataset-understanding-and-exploratory-data-analysis">Section 2: Dataset Understanding and Exploratory Data Analysis</h1>
+<h2 id="21-dataset-inventory-data-integrity-verification">2.1 Dataset Inventory &amp; Data Integrity Verification</h2>
+<p>The PathSnap dataset comprises vehicle trajectories and directed road networks distributed worldwide. The dataset is partitioned into two developmental sets:
+- <strong>Training partition (<code>dataset/train/</code>):</strong> 80 trips used for spatial indexing, feature extraction, cross-validation, and model training.
+- <strong>Student-Testing partition (<code>dataset/test/</code>):</strong> 10 trips held out for developmental evaluation and decoder validation.</p>
+<p>Each trip directory $T$ contains four fundamental files:
+1. <code>$T.track</code>: GPS observations consisting of whitespace-separated <code>(longitude, latitude, timestamp_seconds)</code>.
+2. <code>$T.nodes</code>: Road network vertices consisting of <code>(longitude, latitude)</code>, indexed by 0-based row ID (<code>node_id</code>).
+3. <code>$T.arcs</code>: Directed road network edges consisting of <code>(from_node_id, to_node_id)</code>, indexed by 0-based row ID (<code>arc_id</code>).
+4. <code>$T.route</code>: Ground-truth chronological sequence of traversed <code>arc_id</code> values (available in train and student-test for server-side evaluation).</p>
+<h3 id="comprehensive-partition-summary">Comprehensive Partition Summary</h3>
+<p>The complete data audit computed across all 90 trips yielded the following verifiable statistics:</p>
+<table>
+<thead>
+<tr>
+<th>Partition</th>
+<th>Trips</th>
+<th>Total GPS Observations</th>
+<th>Avg Obs / Trip</th>
+<th>Min / Max Obs</th>
+<th>Avg Road Nodes</th>
+<th>Avg Directed Arcs</th>
+<th>1 Hz Steps (%)</th>
+<th>Avg Route Contiguity (%)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Train</strong></td>
+<td>80</td>
+<td>208,417</td>
+<td>2,605.2</td>
+<td>269 / 7,201</td>
+<td>24,168.6</td>
+<td>51,972.1</td>
+<td>93.83%</td>
+<td>99.93%</td>
+</tr>
+<tr>
+<td><strong>Student-Test</strong></td>
+<td>10</td>
+<td>19,160</td>
+<td>1,916.0</td>
+<td>728 / 3,601</td>
+<td>9,068.9</td>
+<td>19,503.2</td>
+<td>98.20%</td>
+<td>99.97%</td>
+</tr>
+<tr>
+<td><strong>Total / Overall</strong></td>
+<td><strong>90</strong></td>
+<td><strong>227,577</strong></td>
+<td><strong>2,528.6</strong></td>
+<td><strong>269 / 7,201</strong></td>
+<td><strong>22,490.8</strong></td>
+<td><strong>48,364.5</strong></td>
+<td><strong>94.32%</strong></td>
+<td><strong>99.94%</strong></td>
+</tr>
+</tbody>
+</table>
+<h3 id="missing-value-nan-inf-audit">Missing Value (NaN / Inf) Audit</h3>
+<p>Across all 360 individual files (227,577 trajectory points, 2,024,176 road nodes, 4,352,805 road arcs, and 48,120 reference route edges):
+- <strong>NaN / Null values:</strong> Exactly <strong>0</strong> detected.
+- <strong>Infinite / Corrupt entries:</strong> Exactly <strong>0</strong> detected.
+- <strong>File completeness:</strong> All 90 trips possess intact <code>.track</code>, <code>.nodes</code>, <code>.arcs</code>, and <code>.route</code> files.</p>
+<hr />
+<h2 id="22-trajectory-sampling-characteristics-temporal-anomalies">2.2 Trajectory Sampling Characteristics &amp; Temporal Anomalies</h2>
+<h3 id="1-hz-sampling-baseline">1 Hz Sampling Baseline</h3>
+<p>Nominally, the trajectory logger operates at 1 Hz. As shown in our sampling interval distribution analysis:
+- Over <strong>94.3%</strong> of all consecutive timestamps across the dataset exhibit $\Delta t = t_{i} - t_{i-1} = 1.0\text{ s}$ exactly.
+- In student-test trips, the regular 1 Hz compliance reaches <strong>98.20%</strong>.</p>
+<h3 id="extreme-satellite-signal-gaps">Extreme Satellite Signal Gaps</h3>
+<p>Despite nominal 1 Hz logging, several trips exhibit severe tracking blackouts caused by tunnels, urban canyons, receiver power-saving modes, or prolonged vehicle stops:</p>
+<table>
+<thead>
+<tr>
+<th>Trip ID</th>
+<th>Partition</th>
+<th>Total GPS Points</th>
+<th>Max Single Gap (s)</th>
+<th>Max Single Gap (Hours)</th>
+<th>Gaps &gt; 60 s</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong><code>00000090</code></strong></td>
+<td>Train</td>
+<td>536</td>
+<td>153,064.0 s</td>
+<td><strong>42.52 hours</strong></td>
+<td>1</td>
+</tr>
+<tr>
+<td><strong><code>00000078</code></strong></td>
+<td>Train</td>
+<td>2,909</td>
+<td>52,810.0 s</td>
+<td><strong>14.67 hours</strong></td>
+<td>1</td>
+</tr>
+<tr>
+<td><strong><code>00000062</code></strong></td>
+<td>Train</td>
+<td>1,441</td>
+<td>18,342.0 s</td>
+<td><strong>5.10 hours</strong></td>
+<td>1</td>
+</tr>
+<tr>
+<td><strong><code>00000049</code></strong></td>
+<td>Train</td>
+<td>2,216</td>
+<td>7,105.0 s</td>
+<td><strong>1.97 hours</strong></td>
+<td>1</td>
+</tr>
+<tr>
+<td><strong><code>00000017</code></strong></td>
+<td>Train</td>
+<td>3,121</td>
+<td>3,612.0 s</td>
+<td><strong>1.00 hours</strong></td>
+<td>1</td>
+</tr>
+</tbody>
+</table>
+<h3 id="architectural-implication-temporal-track-splitting">Architectural Implication: Temporal Track Splitting</h3>
+<p>Attempting to evaluate Hidden Markov Model transitions across a 42-hour blackout will severely distort the Viterbi decoding path, as routing distances between observations recorded days apart lose topological correlation.<br />
+<strong>System Decision:</strong> As defined in <code>configs/default.yaml</code> (<code>gaps.split_s = 60.0</code>), any gap $\Delta t &gt; 60\text{ s}$ splits the trajectory into independent HMM decoding sub-segments (<code>segment_id</code>). Viterbi decoding restarts afresh at the beginning of each contiguous segment.</p>
+<hr />
+<h2 id="23-geographic-coordinate-distribution-projection-justification">2.3 Geographic Coordinate Distribution &amp; Projection Justification</h2>
+<h3 id="worldwide-spatial-dispersion">Worldwide Spatial Dispersion</h3>
+<p>The 90 trajectories are geographically distributed across disparate locations globally:
+- <strong>Longitude Range:</strong> $-100.29^\circ$ to $+137.41^\circ$
+- <strong>Latitude Range:</strong> $-34.93^\circ$ to $+62.38^\circ$</p>
+<p>Because trajectories occur across North America, Europe, Asia, and the Southern Hemisphere, <strong>no single global UTM zone or planar projection can be chosen</strong>. Applying a single fixed projection (e.g., UTM Zone 32N) would introduce massive distance distortions in distant zones, warping road lengths and perpendicular distance calculations.</p>
+<h3 id="local-metric-projection-architecture">Local Metric Projection Architecture</h3>
+<p>To ensure millimeter-level Euclidean spatial calculations, every trip is projected into a <strong>per-trip local coordinate system</strong> centered on its trajectory centroid:
+$$(\lambda_0, \phi_0) = \left( \frac{1}{N}\sum_{i=1}^N \lambda_i, \; \frac{1}{N}\sum_{i=1}^N \phi_i \right)$$
+Using an <strong>Azimuthal Equidistant (AEQD)</strong> or local Transverse Mercator projection centered at $(\lambda_0, \phi_0)$:
+- Distances and bearings from the center point are preserved without distortion.
+- Local distances in metres represent true ground distances accurately across the entire bounding extent of the trip.
+- Raw longitude/latitude coordinates are converted to projected Cartesian coordinates $(x, y) \in \mathbb{R}^2$ prior to candidate querying and feature engineering.</p>
+<hr />
+<h2 id="24-road-network-complexity-graph-connectivity">2.4 Road Network Complexity &amp; Graph Connectivity</h2>
+<h3 id="graph-scale">Graph Scale</h3>
+<p>Road network complexity varies drastically across trips:
+- <strong>Smallest network:</strong> Trip <code>00000046</code> with <strong>649 directed arcs</strong> and <strong>320 nodes</strong> (ideal for rapid unit testing and benchmarking).
+- <strong>Largest network:</strong> Trip <code>00000084</code> with <strong>307,432 directed arcs</strong> and <strong>135,119 nodes</strong>.
+- <strong>Average network:</strong> 48,364 directed arcs and 22,491 nodes.
+- <strong>Edge-to-Node ratio:</strong> $E/V \approx 2.15$, consistent with sparse planar road networks featuring one-way streets and divided multilane highways.</p>
+<h3 id="directed-vs-undirected-graph-structure">Directed vs. Undirected Graph Structure</h3>
+<p>Arcs in <code>.arcs</code> represent directed road segments (<code>from_node -&gt; to_node</code>). Analysis reveals that the fraction of reversible arcs ($u \to v$ and $v \to u$ both existing) varies between 7% and 100% depending on urban density and highway topology.</p>
+<h3 id="connected-components">Connected Components</h3>
+<p>Applying <code>scipy.sparse.csgraph.connected_components</code>:
+- Most networks contain between 1 and 18 connected components.
+- Disconnected components represent isolated service roads, pedestrian paths, or partitioned highway ramps within the extracted bounding box.
+- Bounded Dijkstra routing must handle cases where two candidate road segments belong to different connected components by falling back to a penalty transition probability.</p>
+<hr />
+<h2 id="25-reference-route-structure-ground-truth-limitations">2.5 Reference Route Structure &amp; Ground-Truth Limitations</h2>
+<h3 id="route-contiguity-verification">Route Contiguity Verification</h3>
+<p>For all training trips and student-test trips, we checked whether consecutive arcs in <code>.route</code> satisfy topological connectivity:
+$$\text{to_node}(arc_i) == \text{from_node}(arc_{i+1})$$
+- <strong>Mean Route Contiguity:</strong> <strong>99.94%</strong> across all trips.
+- <strong>Strictly Contiguous Trips:</strong> 83 out of 90 trips exhibit 100.0% contiguity.
+- In the remaining 7 trips, isolated non-contiguous transitions occur at complex multigrade junctions or roundabouts where intermediate connector micro-arcs were omitted from the logger.</p>
+<h3 id="practical-data-limitations">Practical Data Limitations</h3>
+<ol>
+<li><strong>GPS Noise &amp; Urban Multipath:</strong> GPS observations deviate up to 30–50 metres from the road centerline due to atmospheric delay and building reflections.</li>
+<li><strong>Parallel Road Ambiguity:</strong> Service lanes, freeway expressways, and frontage roads running parallel within 15 metres require multi-candidate consideration and speed/heading features to differentiate.</li>
+<li><strong>Reference Route Inconsistencies:</strong> Because reference routes represent logged device traces rather than physical surveyed alignments, evaluation metrics must measure topological agreement rather than pixel-level coordinate equality.</li>
+</ol>
+<hr />
+<h1 id="section-6-geographical-visualisation-using-folium">Section 6: Geographical Visualisation Using Folium</h1>
+<h2 id="61-folium-mapping-architecture-design-principles">6.1 Folium Mapping Architecture &amp; Design Principles</h2>
+<p>Geographical visualisation is implemented in <code>pathsnap/viz.py</code> via the <code>trip_map()</code> engine, which interfaces with Folium to produce standalone interactive HTML maps and embedded views for the Streamlit UI.</p>
+<h3 id="coordinate-order-handling">Coordinate Order Handling</h3>
+<p>The raw data files store coordinates as <code>(longitude, latitude)</code>. However, Leaflet and Folium require coordinates in <code>[latitude, longitude]</code> order. To prevent inversion errors and guarantee strict consistency across the codebase, coordinate swapping is enforced strictly inside <code>viz.py</code> and <code>RoadNetwork.arc_polyline_lonlat()</code>:
+$$\text{Leaflet Coordinates} = [\text{lat}, \text{lon}] = [\text{track}[:, 1], \text{track}[:, 0]]$$</p>
+<hr />
+<h2 id="62-visual-hierarchy-layer-styling">6.2 Visual Hierarchy &amp; Layer Styling</h2>
+<p>To ensure clarity during evaluator inspections and technical report review, each data layer is assigned distinct visual attributes, line weights, and color encodings adhering to WCAG contrast standards:</p>
+<table>
+<thead>
+<tr>
+<th>Layer Name</th>
+<th>Visual Element</th>
+<th>Color Code</th>
+<th>Styling Parameters</th>
+<th>Semantic Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Raw GPS Points</strong></td>
+<td>Circular Markers &amp; Polyline</td>
+<td><code>#4299E1</code> (Blue)</td>
+<td>Radius: 3.5 px, Weight: 1.5 px, Opacity: 0.85, Dashed line</td>
+<td>Discrete vehicle GPS observations with tooltips showing index and timestamp</td>
+</tr>
+<tr>
+<td><strong>Start / End Markers</strong></td>
+<td>FontAwesome Icons</td>
+<td>Green (<code>play</code>) &amp; Red (<code>flag</code>)</td>
+<td>Pulsing marker icons</td>
+<td>Marks exact trajectory origin and termination</td>
+</tr>
+<tr>
+<td><strong>Road Network</strong></td>
+<td>Thin Polylines</td>
+<td><code>#718096</code> (Slate Grey)</td>
+<td>Weight: 2.0 px, Opacity: 0.60</td>
+<td>Nearby physical road segments available for candidate matching</td>
+</tr>
+<tr>
+<td><strong>Reference Route</strong></td>
+<td>Bold Polyline</td>
+<td><code>#2E7D32</code> (Forest Green)</td>
+<td>Weight: 5.0 px, Opacity: 0.85</td>
+<td>Ground-truth route traversed by the vehicle (Train &amp; Test evaluation only)</td>
+</tr>
+<tr>
+<td><strong>Predicted Route (HMM)</strong></td>
+<td>Bold Polyline</td>
+<td><code>#E53E3E</code> (Crimson Red)</td>
+<td>Weight: 4.5 px, Opacity: 0.90</td>
+<td>Continuous topologically valid route reconstructed by HMM Viterbi decoding</td>
+</tr>
+<tr>
+<td><strong>Classifier-Only Route</strong></td>
+<td>Dashed Polyline</td>
+<td><code>#805AD5</code> (Purple)</td>
+<td>Weight: 3.5 px, Dash: <code>6, 6</code>, Opacity: 0.80</td>
+<td>Pointwise argmax candidate predictions without sequential transition constraints</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="63-interactive-components-usability-features">6.3 Interactive Components &amp; Usability Features</h2>
+<ol>
+<li><strong>Floating Interactive Legend:</strong><br />
+   Injected into the DOM via a Leaflet <code>MacroElement</code> positioned at the bottom right. The legend provides visual color swatches for each active layer and is responsive across varying display resolutions.</li>
+<li><strong>Dynamic Extent Framing (<code>fit_bounds</code>):</strong><br />
+   Automatically calculates the collective spatial bounding box across all GPS coordinates and route vertices, applying a 5% margin padding:
+   $$\text{Bounds} = \left[ [\phi_{\min} - \delta_\phi, \lambda_{\min} - \delta_\lambda], \; [\phi_{\max} + \delta_\phi, \lambda_{\max} + \delta_\lambda] \right]$$
+   This guarantees that opening any trip map immediately zooms to the optimal view without requiring manual panning.</li>
+<li><strong>Layer Control Toggle (<code>folium.LayerControl</code>):</strong><br />
+   Placed in the top-right corner, allowing evaluators to toggle individual layers on and off to isolate differences between the classifier-only predictions and the HMM Viterbi route.</li>
+</ol>
+<hr />
+<h2 id="64-key-map-case-studies-analysis">6.4 Key Map Case Studies &amp; Analysis</h2>
+<p>The batch script <code>scripts/make_maps.py</code> generates interactive HTML maps in <code>results/maps/</code>. Several notable trip visualisations highlight key problem dynamics:</p>
+<h3 id="1-small-benchmark-route-trip-00000046-eda_00000046_baselinehtml">1. Small Benchmark Route: Trip <code>00000046</code> (<code>eda_00000046_baseline.html</code>)</h3>
+<ul>
+<li><strong>Characteristics:</strong> 1,401 GPS observations matched against an urban network of 649 directed arcs.</li>
+<li><strong>Visual Observations:</strong> Clean grid topology with 66 reference arcs. GPS observations follow arterial roads with minimal multipath distortion. Serves as our primary benchmark for latency profiling and unit testing.</li>
+</ul>
+<h3 id="2-extreme-gps-gap-analysis-trip-00000078-eda_00000078_gap_14hhtml">2. Extreme GPS Gap Analysis: Trip <code>00000078</code> (<code>eda_00000078_gap_14h.html</code>)</h3>
+<ul>
+<li><strong>Characteristics:</strong> 2,909 GPS observations, 6,000 localized road arcs, and an extreme <strong>14.67-hour blackout</strong> ($\Delta t = 52,810\text{ s}$).</li>
+<li><strong>Visual Observations:</strong> The map shows a dense initial cluster followed by a long straight leap across the city where the device ceased recording overnight. Without gap-splitting, a naive shortest-path router would hallucinate a continuous path between disconnected nighttime and morning locations. The Folium layer reveals that track segmentation correctly decouples the two halves.</li>
+</ul>
+<h3 id="3-maximum-gap-analysis-trip-00000090-eda_00000090_gap_42hhtml">3. Maximum Gap Analysis: Trip <code>00000090</code> (<code>eda_00000090_gap_42h.html</code>)</h3>
+<ul>
+<li><strong>Characteristics:</strong> 536 GPS observations, 235 reference arcs, and a massive <strong>42.52-hour gap</strong> ($\Delta t = 153,064\text{ s}$).</li>
+<li><strong>Visual Observations:</strong> The vehicle sat idle over a weekend before resuming travel on Monday morning. The interactive map cleanly visualizes the start cluster and resume cluster, confirming the necessity of time-gap thresholds in HMM decoding.</li>
+</ul>
+<h3 id="4-student-testing-trajectories-trips-00000000-00000007">4. Student-Testing Trajectories: Trips <code>00000000</code> &amp; <code>00000007</code></h3>
+<ul>
+<li><strong>Characteristics:</strong> 2,503 and 1,354 GPS points respectively.</li>
+<li><strong>Visual Observations:</strong> Complex highway interchanges featuring elevated overpasses and cloverleaf ramps. The visual comparison clearly demonstrates that pointwise classifier argmax occasionally jumps to the wrong parallel frontage road, whereas the HMM predicted route adheres strictly to valid highway exit ramps.</li>
+</ul>
+<hr />
+<h1 id="section-7-api-ui-and-deployment">Section 7: API, UI and Deployment</h1>
+<h2 id="71-distributed-system-architecture">7.1 Distributed System Architecture</h2>
+<p>PathSnap is designed as a distributed, decoupled client-server application adhering to the hackathon's two-laptop evaluation protocol:</p>
+<pre><code>+-------------------------------------------------------------------------+
+|                       LAPTOP 1: FASTAPI BACKEND                         |
+|                                                                         |
+|  [Inference Pipeline]                                                   |
+|    PathSnapPredictor (model.joblib + hmm_config.json)                   |
+|    Spatial RoadNetwork candidate indexing &amp; Dijkstra shortest path      |
+|                                                                         |
+|  [REST Endpoints]                                                       |
+|    GET  /health   -&gt; {status, model_name, eval_dir, n_trips}            |
+|    GET  /trips    -&gt; {partition, trips: [{trip_id, n_points}, ...]}     |
+|    POST /predict  -&gt; {trip_id, gps_points, predicted_route, metrics}    |
+|                                                                         |
+|  [Security Boundary]                                                    |
+|    Internal evaluation against .route (server-side only)                |
++-------------------------------------------------------------------------+
+                                    ▲
+                     HTTP Port 8000 │ (LAN / Wi-Fi)
+                                    ▼
++-------------------------------------------------------------------------+
+|                      LAPTOP 2: STREAMLIT FRONTEND                       |
+|                                                                         |
+|  • Dynamic Trip Selector populated from GET /trips                      |
+|  • Interactive Folium Map rendered via streamlit_folium                 |
+|  • Accuracy &amp; Continuity Metrics Dashboard                              |
+|  • Pipeline Latency &amp; Timing Breakdown Display                          |
++-------------------------------------------------------------------------+
+</code></pre>
+<hr />
+<h2 id="72-backend-implementation-apimainpy-apischemaspy">7.2 Backend Implementation (<code>api/main.py</code> &amp; <code>api/schemas.py</code>)</h2>
+<p>The FastAPI service runs on <strong>Laptop 1</strong> and serves map-matching predictions on port 8000.</p>
+<h3 id="1-lifespan-model-initialization">1. Lifespan Model Initialization</h3>
+<p>Models and HMM configurations are loaded once into memory during application startup using FastAPI's modern <code>lifespan</code> handler. This prevents redundant disk reads and guarantees sub-second response times for subsequent inference queries.</p>
+<h3 id="2-request-logging-observability">2. Request Logging &amp; Observability</h3>
+<p>Every inbound HTTP request is intercepted by an asynchronous timing middleware:</p>
+<pre><code class="language-python">@app.middleware(&quot;http&quot;)
+async def log_requests(request: Request, call_next):
+    t0 = time.perf_counter()
+    response = await call_next(request)
+    duration_ms = (time.perf_counter() - t0) * 1000
+    log.info(&quot;%s %s from %s -&gt; %d (%.1f ms)&quot;, request.method, request.url.path,
+             request.client.host if request.client else &quot;unknown&quot;,
+             response.status_code, duration_ms)
+    return response
+</code></pre>
+<p>This guarantees that evaluators seated at Laptop 1 can observe real-time terminal output detailing every prediction request, execution time, and server-side metric.</p>
+<h3 id="3-strict-data-leakage-prevention">3. Strict Data Leakage Prevention</h3>
+<p>In strict adherence to competition rules:
+- Ground-truth reference routes (<code>.route</code>) are never transmitted over the wire or exposed in JSON responses.
+- The <code>/predict</code> endpoint returns only the vehicle's observed <code>gps_points</code>, the reconstructed <code>predicted_route</code> (and optional <code>classifier_route</code>) polylines, aggregate metrics, and timing metadata.
+- Evaluation metrics are computed strictly server-side by loading the reference route internally.</p>
+<hr />
+<h2 id="73-frontend-evaluator-interface-uiapppy">7.3 Frontend Evaluator Interface (<code>ui/app.py</code>)</h2>
+<p>The user interface on <strong>Laptop 2</strong> is built with Streamlit and communicates exclusively over HTTP with Laptop 1 via the <code>PATHSNAP_API_URL</code> environment variable.</p>
+<h3 id="key-ui-capabilities">Key UI Capabilities:</h3>
+<ol>
+<li><strong>Live Health &amp; Connectivity Status:</strong> Automatically pings <code>GET /health</code>. If the server is unreachable, a warning badge is displayed with a "Retry Connection" action.</li>
+<li><strong>Evaluator Trip Selector:</strong> Queries <code>GET /trips</code> and generates a formatted dropdown displaying the Trip ID and observation count (e.g., <code>Trip 00000000 (2503 pts)</code>).</li>
+<li><strong>Interactive Folium Map View:</strong> Employs <code>streamlit_folium</code> to display the map with full layer toggling (GPS points, predicted HMM route, classifier route, start/end pins).</li>
+<li><strong>Metrics Dashboard:</strong> Highlighting Top-1 Accuracy, Route Continuity, Precision, Recall, F1 score, and Candidate Miss Rate.</li>
+<li><strong>Latency Breakdown:</strong> Displays candidate lookup, feature engineering, model inference, and Viterbi decoding times alongside the total network round-trip time.</li>
+</ol>
+<hr />
+<h2 id="74-demo-day-two-laptop-deployment-checklist">7.4 Demo-Day Two-Laptop Deployment Checklist</h2>
+<p>To ensure flawless execution during live evaluation:</p>
+<ol>
+<li><strong>Local Area Network (LAN) Configuration:</strong></li>
+<li>Connect Laptop 1 and Laptop 2 to the same local Wi-Fi network (or a dedicated mobile hotspot).</li>
+<li>On Laptop 1 (Windows), execute <code>ipconfig</code> to discover the IPv4 address (e.g., <code>192.168.1.45</code>).</li>
+<li><strong>Firewall Rule Verification:</strong></li>
+<li>Permit inbound TCP traffic on port <code>8000</code> on Laptop 1.</li>
+<li><strong>Starting Laptop 1 (API Backend):</strong>
+   <code>bash
+   PATHSNAP_EVAL_DIR=/path/to/evaluation_trips uvicorn api.main:app --host 0.0.0.0 --port 8000</code>
+   <em>Note: The terminal window must remain open and visible to evaluators.</em></li>
+<li><strong>Starting Laptop 2 (UI Frontend):</strong>
+   <code>bash
+   PATHSNAP_API_URL=http://192.168.1.45:8000 streamlit run ui/app.py</code></li>
+<li><strong>Verification Protocol:</strong></li>
+<li>Execute all 10 evaluation trips once before evaluator review to warm up the OS file cache and verify memory stability.</li>
+</ol>
+<hr />
+<h1 id="section-8-academic-integrity-ai-assistance-disclosure">Section 8: Academic Integrity &amp; AI-Assistance Disclosure</h1>
+<h2 id="81-statement-of-authenticity-originality">8.1 Statement of Authenticity &amp; Originality</h2>
+<p>In accordance with the PES University UE24CS352A Assessment and Academic Integrity Policy, all work submitted in this repository represents the original, independent work of this team:
+- All data exploration, spatial indexing, candidate generation, feature design, model training, hyperparameter optimisation, HMM sequential decoding, and API/UI deployments were developed specifically for this project.
+- No model weights, code, parameters, or precomputed predictions were shared with or obtained from other participating teams.
+- Ground truth from the evaluation set was strictly quarantined and never used to fit models, select features, or tune hyperparameters.</p>
+<hr />
+<h2 id="82-ai-assistance-disclosure">8.2 AI-Assistance Disclosure</h2>
+<p>In transparency and compliance with competition guidelines, AI assistance (specifically Google Antigravity) was utilized during the development of this project for the following permitted tasks:
+1. <strong>Scaffolding and Syntax Acceleration:</strong> Assisting in formulating boilerplate code for FastAPI endpoints (<code>api/main.py</code>), Folium HTML legend injection (<code>pathsnap/viz.py</code>), and Streamlit state management (<code>ui/app.py</code>).
+2. <strong>Exploratory Data Analysis Automation:</strong> Generating exploratory plotting scripts and statistical aggregation routines for <code>notebooks/p4_eda.ipynb</code> across all 90 trip files.
+3. <strong>Documentation and Markdown Structuring:</strong> Assisting with technical documentation formatting, LaTeX mathematical equation rendering, and markdown report drafting.</p>
+<p>All architectural decisions, algorithmic designs (spatial candidate lookup, feature engineering, loss formulation, Viterbi log-likelihood recurrence, and distributed client-server separation) were directed, verified, and validated by the team members.</p>
+<hr />
+</body>
+</html>

@@ -1,0 +1,42 @@
+{
+  "model_name": "lgbm",
+  "family": "Boosting",
+  "feature_cols": [
+    "dist_m",
+    "dist_minus_min_m",
+    "dist_ratio_min",
+    "rank",
+    "n_candidates",
+    "heading_diff_deg",
+    "heading_align",
+    "speed_mps",
+    "nbr_dist_mean_m",
+    "nbr_dist_max_m",
+    "arc_len_m",
+    "endpoint_dist_m",
+    "is_oneway",
+    "to_out_degree"
+  ],
+  "params": {
+    "n_estimators": 197,
+    "learning_rate": 0.03495647613831777,
+    "num_leaves": 136,
+    "min_child_samples": 22,
+    "subsample": 0.7952908891858085,
+    "subsample_freq": 1,
+    "colsample_bytree": 0.7768602250041311,
+    "reg_alpha": 0.006866870565602956,
+    "reg_lambda": 3.4157264119818544e-05
+  },
+  "candidates": {
+    "k": 8,
+    "radius_m": 60.0
+  },
+  "sklearn_version": "1.5.1",
+  "lightgbm_version": "4.5.0",
+  "trained_on": "train (78 trips after the min_labelled_share rule)",
+  "cv_macro_f1": 0.9376082211773735,
+  "cv_log_loss": 0.08713284133881617,
+  "cv_top1": 0.8995055701228534,
+  "seed": 42
+}

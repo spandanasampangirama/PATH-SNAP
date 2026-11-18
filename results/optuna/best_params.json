@@ -1,0 +1,32 @@
+{
+  "model": "lgbm",
+  "objective": "minimise mean GroupKFold CV log loss (train partition)",
+  "sampler": "TPE(seed=42, n_startup_trials=10)",
+  "pruner": "MedianPruner(n_startup_trials=5, n_warmup_steps=1)",
+  "n_trials": 50,
+  "n_completed": 16,
+  "n_pruned": 34,
+  "search_seconds": 3511.992482153997,
+  "best_trial": 20,
+  "best_cv_log_loss": 0.08713284133881617,
+  "best_params": {
+    "n_estimators": 197,
+    "learning_rate": 0.03495647613831777,
+    "num_leaves": 136,
+    "min_child_samples": 22,
+    "subsample": 0.7952908891858085,
+    "colsample_bytree": 0.7768602250041311,
+    "reg_alpha": 0.006866870565602956,
+    "reg_lambda": 3.4157264119818544e-05
+  },
+  "search_space": {
+    "n_estimators": "int 100-1000 (log)",
+    "learning_rate": "float 0.01-0.2 (log)",
+    "num_leaves": "int 15-255 (log)",
+    "min_child_samples": "int 10-500 (log)",
+    "subsample": "float 0.5-1.0",
+    "colsample_bytree": "float 0.5-1.0",
+    "reg_alpha": "float 1e-8-10 (log)",
+    "reg_lambda": "float 1e-8-10 (log)"
+  }
+}

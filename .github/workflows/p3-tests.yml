@@ -1,0 +1,20 @@
+name: P3 routing and HMM tests
+
+on:
+  push:
+    branches: [main, p3/hmm, p3/classifier-integration, p3/complete-2026-11-18]
+  pull_request:
+    branches: [main]
+
+jobs:
+  p3-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install P3 test dependencies
+        run: python -m pip install numpy pandas shapely pyproj pytest pyyaml joblib
+      - name: Run synthetic P3 routing, HMM and pipeline tests
+        run: python -m pytest -q tests/test_p3_routing_hmm.py tests/test_p3_pipeline_eval.py
